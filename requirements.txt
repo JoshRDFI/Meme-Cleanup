@@ -17,7 +17,7 @@ transformers>=4.35.0
 scikit-image>=0.21.0
 
 # Database
-sqlite3  # Built-in with Python
+# sqlite3  # Built-in with Python
 
 # Utilities
 tqdm>=4.66.0
