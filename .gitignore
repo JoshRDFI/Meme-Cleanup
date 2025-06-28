@@ -10,8 +10,11 @@
 *.userosscache
 *.sln.docstates
 
-# User-specific files (MonoDevelop/Xamarin Studio)
+# User-specific files (MonoDevelop/Xamarin Studio
 *.userprefs
+
+# Ignore Venv
+venv/
 
 # Mono auto generated files
 mono_crash.*
