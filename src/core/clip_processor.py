@@ -18,7 +18,7 @@ from utils.image_utils import load_image, preprocess_image_for_clip
 logger = logging.getLogger(__name__)
 
 
-class CLIPProcessor:
+class CLIPEmbeddingProcessor:
     """Handles CLIP model operations for image embedding generation."""
     
     def __init__(self, model_name: str = "openai/clip-vit-base-patch32", device: Optional[str] = None):

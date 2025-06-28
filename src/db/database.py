@@ -127,6 +127,21 @@ class DatabaseManager:
             )
         """)
         
+        # Create scan_results table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS scan_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                directories_scanned INTEGER NOT NULL,
+                total_images_processed INTEGER NOT NULL,
+                total_images_found INTEGER NOT NULL,
+                corrupted_files_skipped INTEGER NOT NULL,
+                skipped_files_count INTEGER NOT NULL,
+                scan_duration REAL NOT NULL,
+                scan_completed_at REAL NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
         # Create indexes for better performance
         conn.execute("CREATE INDEX IF NOT EXISTS idx_images_file_path ON images(file_path)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_images_perceptual_hash ON images(perceptual_hash)")
@@ -146,6 +161,21 @@ class DatabaseManager:
             Image ID
         """
         with self._get_connection() as conn:
+            # Filter out EXIF data and other non-serializable fields
+            safe_image_data = {
+                'file_path': image_data['file_path'],
+                'file_size': image_data['file_size'],
+                'file_modified': image_data['file_modified'],
+                'width': image_data.get('width'),
+                'height': image_data.get('height'),
+                'format': image_data.get('format'),
+                'mode': image_data.get('mode'),
+                'dpi_x': image_data.get('dpi', (None, None))[0] if image_data.get('dpi') else None,
+                'dpi_y': image_data.get('dpi', (None, None))[1] if image_data.get('dpi') else None,
+                'perceptual_hash': image_data.get('perceptual_hash'),
+                'processed_at': image_data.get('processed_at')
+            }
+            
             cursor = conn.execute("""
                 INSERT OR REPLACE INTO images (
                     file_path, file_size, file_modified, width, height,
@@ -153,17 +183,17 @@ class DatabaseManager:
                     processed_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                image_data['file_path'],
-                image_data['file_size'],
-                image_data['file_modified'],
-                image_data.get('width'),
-                image_data.get('height'),
-                image_data.get('format'),
-                image_data.get('mode'),
-                image_data.get('dpi', (None, None))[0] if image_data.get('dpi') else None,
-                image_data.get('dpi', (None, None))[1] if image_data.get('dpi') else None,
-                image_data.get('perceptual_hash'),
-                image_data.get('processed_at')
+                safe_image_data['file_path'],
+                safe_image_data['file_size'],
+                safe_image_data['file_modified'],
+                safe_image_data['width'],
+                safe_image_data['height'],
+                safe_image_data['format'],
+                safe_image_data['mode'],
+                safe_image_data['dpi_x'],
+                safe_image_data['dpi_y'],
+                safe_image_data['perceptual_hash'],
+                safe_image_data['processed_at']
             ))
             
             conn.commit()
@@ -324,4 +354,67 @@ class DatabaseManager:
             conn.execute("DELETE FROM images")
             conn.execute("DELETE FROM processing_sessions")
             conn.commit()
-            logger.info("Database cleared") 
+            logger.info("Database cleared")
+    
+    def save_scan_results(self, scan_results: Dict[str, Any]) -> None:
+        """Save scan results to the database."""
+        try:
+            cursor = self._get_connection().cursor()
+            cursor.execute("""
+                INSERT INTO scan_results 
+                (directories_scanned, total_images_processed, total_images_found, 
+                 corrupted_files_skipped, skipped_files_count, scan_duration, scan_completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                scan_results['directories_scanned'],
+                scan_results['total_images_processed'],
+                scan_results['total_images_found'],
+                scan_results['corrupted_files_skipped'],
+                scan_results['skipped_files_count'],
+                scan_results['scan_duration'],
+                scan_results['scan_completed_at']
+            ))
+            self._get_connection().commit()
+            logger.info("Scan results saved to database")
+        except Exception as e:
+            logger.error(f"Failed to save scan results: {e}")
+            self._get_connection().rollback()
+    
+    def get_selected_images(self) -> List[Dict[str, Any]]:
+        """Get all selected images from duplicate groups."""
+        try:
+            cursor = self._get_connection().cursor()
+            cursor.execute("""
+                SELECT i.* FROM images i
+                INNER JOIN duplicate_images di ON i.id = di.image_id
+                WHERE di.is_selected = 1
+                ORDER BY i.file_path
+            """)
+            
+            results = []
+            for row in cursor.fetchall():
+                results.append(dict(row))
+            
+            return results
+        except Exception as e:
+            logger.error(f"Failed to get selected images: {e}")
+            return []
+    
+    def get_all_processed_images(self) -> List[Dict[str, Any]]:
+        """Get all processed images (with embeddings)."""
+        try:
+            cursor = self._get_connection().cursor()
+            cursor.execute("""
+                SELECT * FROM images 
+                WHERE clip_embedding IS NOT NULL
+                ORDER BY file_path
+            """)
+            
+            results = []
+            for row in cursor.fetchall():
+                results.append(dict(row))
+            
+            return results
+        except Exception as e:
+            logger.error(f"Failed to get all processed images: {e}")
+            return [] 

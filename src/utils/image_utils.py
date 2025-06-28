@@ -25,6 +25,85 @@ SUPPORTED_FORMATS = {
 VIDEO_FORMATS = {'.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v'}
 
 
+def is_valid_image_file(file_path: Path, debug: bool = False) -> bool:
+    """
+    Check if a file is actually a valid image file by attempting to open it.
+    Uses a lenient approach to avoid false positives.
+    
+    Args:
+        file_path: Path to the file to check
+        debug: If True, log detailed validation steps
+        
+    Returns:
+        True if the file is a valid image that can be opened
+    """
+    try:
+        # First check if file exists and has content
+        if not file_path.exists():
+            if debug:
+                logger.debug(f"File does not exist: {file_path}")
+            return False
+            
+        if file_path.stat().st_size == 0:
+            if debug:
+                logger.debug(f"File is empty: {file_path}")
+            return False
+        
+        if debug:
+            logger.debug(f"Validating image: {file_path}")
+        
+        # Try to open the image with PIL
+        with Image.open(file_path) as img:
+            # Try to access basic properties - this is much more lenient than verify()
+            try:
+                # Just try to get basic info - don't use verify() which is too strict
+                width, height = img.size
+                format_name = img.format
+                
+                if debug:
+                    logger.debug(f"  Format: {format_name}, Size: {width}x{height}")
+                
+                # Basic sanity checks
+                if width <= 0 or height <= 0:
+                    logger.warning(f"Invalid dimensions in {file_path}: {width}x{height}")
+                    return False
+                
+                if not format_name:
+                    logger.warning(f"No format detected for {file_path}")
+                    return False
+                
+                # Try to load the first frame (for animated images)
+                if hasattr(img, 'n_frames') and img.n_frames > 1:
+                    if debug:
+                        logger.debug(f"  Animated image with {img.n_frames} frames")
+                    # For animated images, try to load the first frame
+                    img.seek(0)
+                
+                # Try to convert to RGB to test if the image can be processed
+                # This catches most corruption issues without being too strict
+                test_img = img.convert('RGB')
+                test_array = np.array(test_img)
+                
+                # Basic array sanity check
+                if test_array.size == 0:
+                    logger.warning(f"Empty image array for {file_path}")
+                    return False
+                
+                if debug:
+                    logger.debug(f"  Validation successful for {file_path}")
+                return True
+                
+            except (OSError, ValueError, TypeError) as e:
+                # These are the errors that indicate actual corruption
+                logger.warning(f"Image corruption detected in {file_path}: {e}")
+                return False
+                
+    except Exception as e:
+        # Log the specific error for debugging
+        logger.warning(f"Failed to validate {file_path}: {e}")
+        return False
+
+
 def is_supported_image(file_path: Path) -> bool:
     """
     Check if a file is a supported image format.
@@ -131,9 +210,33 @@ def extract_image_metadata(file_path: Path) -> Dict[str, Any]:
                 'compression': img.info.get('compression')
             })
             
-            # Extract EXIF data if available
-            if hasattr(img, '_getexif') and img._getexif():
-                metadata['exif'] = dict(img._getexif())
+            # Extract EXIF data if available - convert to serializable format
+            try:
+                if hasattr(img, '_getexif') and img._getexif():
+                    exif_data = img._getexif()
+                    # Convert EXIF data to serializable format
+                    serializable_exif = {}
+                    for tag_id, value in exif_data.items():
+                        try:
+                            # Convert IFDRational and other PIL types to simple values
+                            if hasattr(value, 'numerator') and hasattr(value, 'denominator'):
+                                # Handle IFDRational
+                                serializable_exif[tag_id] = float(value.numerator) / float(value.denominator)
+                            elif isinstance(value, (int, float, str, bool)):
+                                serializable_exif[tag_id] = value
+                            else:
+                                # Convert other types to string
+                                serializable_exif[tag_id] = str(value)
+                        except Exception as e:
+                            logger.warning(f"Failed to serialize EXIF tag {tag_id}: {e}")
+                            # Skip problematic EXIF tags
+                            continue
+                    
+                    metadata['exif'] = serializable_exif
+            except Exception as e:
+                logger.warning(f"Failed to extract EXIF data from {file_path}: {e}")
+                # Continue without EXIF data
+                metadata['exif'] = None
             
             # Calculate metadata richness score
             metadata['metadata_richness'] = calculate_metadata_richness(metadata)
@@ -271,18 +374,19 @@ def calculate_image_hash(image: np.ndarray) -> str:
     return f"{hash_int:016x}"
 
 
-def get_image_files(directory: Path, recursive: bool = True) -> List[Path]:
+def get_valid_image_files(directory: Path, recursive: bool = True) -> List[Path]:
     """
-    Get all image files from a directory, excluding video files.
+    Get all valid image files from a directory, filtering out corrupted files.
     
     Args:
         directory: Directory to scan
         recursive: Whether to scan subdirectories
         
     Returns:
-        List of image file paths
+        List of valid image file paths
     """
     image_files = []
+    corrupted_files = []
     
     if recursive:
         pattern = "**/*"
@@ -291,24 +395,32 @@ def get_image_files(directory: Path, recursive: bool = True) -> List[Path]:
     
     for file_path in directory.glob(pattern):
         if file_path.is_file() and is_supported_image(file_path):
-            image_files.append(file_path)
+            if is_valid_image_file(file_path):
+                image_files.append(file_path)
+            else:
+                corrupted_files.append(file_path)
+                logger.warning(f"Corrupted or invalid image file: {file_path}")
+    
+    if corrupted_files:
+        logger.warning(f"Found {len(corrupted_files)} corrupted/invalid image files in {directory}")
     
     return sorted(image_files)
 
 
-def get_all_media_files(directory: Path, recursive: bool = True) -> Tuple[List[Path], List[Path]]:
+def get_all_media_files(directory: Path, recursive: bool = True) -> Tuple[List[Path], List[Path], List[Path]]:
     """
-    Get all media files from a directory, separating images and videos.
+    Get all media files from a directory, separating images, videos, and corrupted files.
     
     Args:
         directory: Directory to scan
         recursive: Whether to scan subdirectories
         
     Returns:
-        Tuple of (image_files, video_files)
+        Tuple of (valid_image_files, video_files, corrupted_files)
     """
     image_files = []
     video_files = []
+    corrupted_files = []
     
     if recursive:
         pattern = "**/*"
@@ -318,8 +430,103 @@ def get_all_media_files(directory: Path, recursive: bool = True) -> Tuple[List[P
     for file_path in directory.glob(pattern):
         if file_path.is_file():
             if is_supported_image(file_path):
-                image_files.append(file_path)
+                if is_valid_image_file(file_path):
+                    image_files.append(file_path)
+                else:
+                    corrupted_files.append(file_path)
             elif is_video_file(file_path):
                 video_files.append(file_path)
     
-    return sorted(image_files), sorted(video_files) 
+    return sorted(image_files), sorted(video_files), sorted(corrupted_files)
+
+
+def get_scan_summary(directory: Path, recursive: bool = True) -> Dict[str, Any]:
+    """
+    Get a summary of all files in a directory.
+    
+    Args:
+        directory: Directory to scan
+        recursive: Whether to scan subdirectories
+        
+    Returns:
+        Dictionary with scan summary
+    """
+    valid_images, videos, corrupted = get_all_media_files(directory, recursive)
+    
+    return {
+        'directory': str(directory),
+        'valid_images': len(valid_images),
+        'video_files': len(videos),
+        'corrupted_files': len(corrupted),
+        'total_files': len(valid_images) + len(videos) + len(corrupted),
+        'corrupted_file_paths': [str(f) for f in corrupted[:10]]  # First 10 for reporting
+    }
+
+
+def test_image_file(file_path: Path) -> Dict[str, Any]:
+    """
+    Test a specific image file and return detailed validation results.
+    Useful for debugging validation issues.
+    
+    Args:
+        file_path: Path to the image file to test
+        
+    Returns:
+        Dictionary with detailed test results
+    """
+    result = {
+        'file_path': str(file_path),
+        'exists': False,
+        'file_size': 0,
+        'is_valid': False,
+        'format': None,
+        'dimensions': None,
+        'error': None,
+        'validation_steps': []
+    }
+    
+    try:
+        # Check if file exists
+        if not file_path.exists():
+            result['error'] = "File does not exist"
+            return result
+        
+        result['exists'] = True
+        result['file_size'] = file_path.stat().st_size
+        
+        if result['file_size'] == 0:
+            result['error'] = "File is empty"
+            return result
+        
+        result['validation_steps'].append("File exists and has content")
+        
+        # Try to open with PIL
+        with Image.open(file_path) as img:
+            result['validation_steps'].append("Successfully opened with PIL")
+            
+            # Get basic info
+            result['format'] = img.format
+            result['dimensions'] = (img.width, img.height)
+            
+            result['validation_steps'].append(f"Format: {img.format}, Size: {img.width}x{img.height}")
+            
+            # Check for animation
+            if hasattr(img, 'n_frames') and img.n_frames > 1:
+                result['validation_steps'].append(f"Animated image with {img.n_frames} frames")
+                img.seek(0)
+            
+            # Try to convert to RGB
+            test_img = img.convert('RGB')
+            result['validation_steps'].append("Successfully converted to RGB")
+            
+            # Try to convert to numpy array
+            test_array = np.array(test_img)
+            result['validation_steps'].append(f"Successfully converted to numpy array: {test_array.shape}")
+            
+            result['is_valid'] = True
+            
+    except Exception as e:
+        result['error'] = str(e)
+        result['validation_steps'].append(f"Error: {e}")
+    
+    return result 

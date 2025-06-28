@@ -6,18 +6,20 @@ Handles directory scanning, image processing, and progress tracking.
 
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget,
     QFileDialog, QProgressBar, QGroupBox, QCheckBox, QSpinBox, QDoubleSpinBox,
-    QTextEdit, QMessageBox, QFrame, QComboBox
+    QTextEdit, QMessageBox, QFrame, QComboBox, QProgressDialog, QDialog, QRadioButton,
+    QButtonGroup
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 
 from db.database import DatabaseManager
 from core.deduplicator import Deduplicator, DeduplicationConfig
+from utils.image_utils import get_scan_summary
 
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,7 @@ class ProcessingThread(QThread):
     progress_updated = pyqtSignal(int, int, str)  # value, maximum, message
     processing_finished = pyqtSignal(list)  # duplicate groups
     error_occurred = pyqtSignal(str)  # error message
+    scan_results_ready = pyqtSignal(dict)  # scan results
     
     def __init__(self, deduplicator: Deduplicator, source_directories: List[Path]):
         super().__init__()
@@ -42,6 +45,7 @@ class ProcessingThread(QThread):
             # Run full deduplication
             duplicate_groups = self.deduplicator.run_full_deduplication(self.source_directories)
             self.processing_finished.emit(duplicate_groups)
+            self.scan_results_ready.emit(self.deduplicator.get_scan_results())
         except Exception as e:
             logger.error(f"Processing failed: {e}")
             self.error_occurred.emit(str(e))
@@ -49,6 +53,15 @@ class ProcessingThread(QThread):
     def stop(self):
         """Request stop of processing."""
         self._stop_requested = True
+
+
+class ScanWorker(QThread):
+    """Worker thread for scanning directories."""
+    progress_updated = pyqtSignal(int, int)
+    log_message = pyqtSignal(str)
+    scan_completed = pyqtSignal(list)
+    scan_failed = pyqtSignal(str)
+    scan_results_ready = pyqtSignal(dict)
 
 
 class ScanTab(QWidget):
@@ -98,12 +111,22 @@ class ScanTab(QWidget):
         self.dir_list.setMaximumHeight(150)
         dir_layout.addWidget(self.dir_list)
         
+        # Directory summary
+        self.dir_summary_label = QLabel("No directories added")
+        self.dir_summary_label.setStyleSheet("color: #666; font-style: italic;")
+        dir_layout.addWidget(self.dir_summary_label)
+        
         # Directory buttons
         dir_buttons_layout = QHBoxLayout()
         
         self.add_dir_button = QPushButton("Add Directory")
         self.add_dir_button.clicked.connect(self.add_directory)
         dir_buttons_layout.addWidget(self.add_dir_button)
+        
+        self.add_multiple_button = QPushButton("Add Multiple")
+        self.add_multiple_button.clicked.connect(self.quick_add_directories)
+        self.add_multiple_button.setToolTip("Add multiple directories by entering paths separated by commas")
+        dir_buttons_layout.addWidget(self.add_multiple_button)
         
         self.remove_dir_button = QPushButton("Remove Directory")
         self.remove_dir_button.clicked.connect(self.remove_directory)
@@ -240,6 +263,130 @@ class ScanTab(QWidget):
         self.start_button.clicked.connect(self.start_processing)
         control_layout.addWidget(self.start_button)
         
+        self.quick_scan_button = QPushButton("Quick Scan")
+        self.quick_scan_button.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #F57C00;
+            }
+            QPushButton:pressed {
+                background-color: #E65100;
+            }
+            QPushButton:disabled {
+                background-color: #666666;
+            }
+        """)
+        self.quick_scan_button.clicked.connect(self.quick_scan)
+        control_layout.addWidget(self.quick_scan_button)
+        
+        self.consolidate_button = QPushButton("Consolidate Files")
+        self.consolidate_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+            QPushButton:pressed {
+                background-color: #0D47A1;
+            }
+            QPushButton:disabled {
+                background-color: #666666;
+            }
+        """)
+        self.consolidate_button.clicked.connect(self.consolidate_files)
+        self.consolidate_button.setEnabled(False)
+        control_layout.addWidget(self.consolidate_button)
+        
+        self.test_similarity_button = QPushButton("Test Similarity")
+        self.test_similarity_button.setStyleSheet("""
+            QPushButton {
+                background-color: #9C27B0;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #7B1FA2;
+            }
+            QPushButton:pressed {
+                background-color: #4A148C;
+            }
+            QPushButton:disabled {
+                background-color: #666666;
+            }
+        """)
+        self.test_similarity_button.clicked.connect(self.test_similarity_detection)
+        self.test_similarity_button.setEnabled(False)
+        control_layout.addWidget(self.test_similarity_button)
+        
+        self.show_stats_button = QPushButton("Show Stats")
+        self.show_stats_button.setStyleSheet("""
+            QPushButton {
+                background-color: #607D8B;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #455A64;
+            }
+            QPushButton:pressed {
+                background-color: #263238;
+            }
+            QPushButton:disabled {
+                background-color: #666666;
+            }
+        """)
+        self.show_stats_button.clicked.connect(self.show_processing_stats)
+        self.show_stats_button.setEnabled(False)
+        control_layout.addWidget(self.show_stats_button)
+        
+        self.clear_db_button = QPushButton("Clear DB")
+        self.clear_db_button.setStyleSheet("""
+            QPushButton {
+                background-color: #F44336;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #D32F2F;
+            }
+            QPushButton:pressed {
+                background-color: #B71C1C;
+            }
+            QPushButton:disabled {
+                background-color: #666666;
+            }
+        """)
+        self.clear_db_button.clicked.connect(self.clear_database)
+        self.clear_db_button.setToolTip("Clear all data from database and start fresh")
+        control_layout.addWidget(self.clear_db_button)
+        
         self.stop_button = QPushButton("Stop Processing")
         self.stop_button.setStyleSheet("""
             QPushButton {
@@ -267,43 +414,112 @@ class ScanTab(QWidget):
         
         control_layout.addStretch()
         
-        # Quick scan button
-        self.quick_scan_button = QPushButton("Quick Scan")
-        self.quick_scan_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4A90E2;
-                color: white;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #357ABD;
-            }
-            QPushButton:pressed {
-                background-color: #2D5A8E;
-            }
-        """)
-        self.quick_scan_button.clicked.connect(self.quick_scan)
-        control_layout.addWidget(self.quick_scan_button)
-        
         layout.addLayout(control_layout)
         layout.addStretch()
     
+    def update_directory_summary(self):
+        """Update the directory summary display."""
+        if not self.source_directories:
+            self.dir_summary_label.setText("No directories added")
+            return
+        
+        total_dirs = len(self.source_directories)
+        self.dir_summary_label.setText(f"{total_dirs} directory{'s' if total_dirs > 1 else ''} added")
+    
     def add_directory(self):
-        """Add a directory to the scan list."""
-        directory = QFileDialog.getExistingDirectory(
-            self, "Select Directory to Scan"
+        """Add directories to the scan list."""
+        # Use QFileDialog to select multiple directories
+        directories = QFileDialog.getExistingDirectory(
+            self, "Select Directories to Scan", "",
+            QFileDialog.Option.ShowDirsOnly
         )
         
-        if directory:
-            path = Path(directory)
+        if directories:
+            path = Path(directories)
             if path not in self.source_directories:
+                # Quick check - just verify it's a valid directory
+                if not path.exists() or not path.is_dir():
+                    QMessageBox.warning(self, "Invalid Directory", f"'{path}' is not a valid directory.")
+                    return
+                
+                # Quick count of files
+                try:
+                    all_files = list(path.rglob('*'))
+                    image_files = [f for f in all_files if f.is_file() and 
+                                 f.suffix.lower() in {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp', '.gif'}]
+                    video_files = [f for f in all_files if f.is_file() and 
+                                 f.suffix.lower() in {'.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v'}]
+                    
+                    count_text = f"""
+Directory: {path.name}
+Total files: {len(all_files)}
+Image files: {len(image_files)}
+Video files: {len(video_files)}
+Other files: {len(all_files) - len(image_files) - len(video_files)}
+                    """
+                    
+                    QMessageBox.information(self, "Directory Summary", count_text)
+                    
+                except Exception as e:
+                    logger.warning(f"Could not count files in {path}: {e}")
+                
+                # Add to list without scanning
                 self.source_directories.append(path)
                 self.dir_list.addItem(str(path))
                 self.log_message(f"Added directory: {path}")
+                self.update_directory_summary()
+    
+    def add_multiple_directories(self):
+        """Add multiple directories at once."""
+        # Note: QFileDialog doesn't support multiple directory selection natively
+        # So we'll use a custom dialog or just allow multiple single selections
+        directories = QFileDialog.getExistingDirectory(
+            self, "Select Directory to Add", "",
+            QFileDialog.Option.ShowDirsOnly
+        )
+        
+        if directories:
+            path = Path(directories)
+            if path not in self.source_directories:
+                if not path.exists() or not path.is_dir():
+                    QMessageBox.warning(self, "Invalid Directory", f"'{path}' is not a valid directory.")
+                    return
+                
+                self.source_directories.append(path)
+                self.dir_list.addItem(str(path))
+                self.log_message(f"Added directory: {path}")
+                self.update_directory_summary()
+    
+    def quick_add_directories(self):
+        """Quick add multiple directories with a simple dialog."""
+        from PyQt6.QtWidgets import QInputDialog
+        
+        # Get a comma-separated list of directories
+        text, ok = QInputDialog.getText(
+            self, "Add Multiple Directories", 
+            "Enter directory paths (separated by commas):\n"
+            "Example: E:\\Phone, E:\\Phone2, E:\\Phone3"
+        )
+        
+        if ok and text.strip():
+            directories = [d.strip() for d in text.split(',') if d.strip()]
+            added_count = 0
+            
+            for dir_path in directories:
+                path = Path(dir_path)
+                if path not in self.source_directories:
+                    if not path.exists() or not path.is_dir():
+                        self.log_message(f"Skipped invalid directory: {path}")
+                        continue
+                    
+                    self.source_directories.append(path)
+                    self.dir_list.addItem(str(path))
+                    self.log_message(f"Added directory: {path}")
+                    added_count += 1
+            
+            if added_count > 0:
+                self.update_directory_summary()
+                self.log_message(f"Added {added_count} directories")
     
     def remove_directory(self):
         """Remove selected directory from the scan list."""
@@ -313,12 +529,14 @@ class ScanTab(QWidget):
             path = Path(item.text())
             self.source_directories.remove(path)
             self.log_message(f"Removed directory: {path}")
+            self.update_directory_summary()
     
     def clear_directories(self):
         """Clear all directories from the scan list."""
         self.dir_list.clear()
         self.source_directories.clear()
         self.log_message("Cleared all directories")
+        self.update_directory_summary()
     
     def start_scan(self):
         """Start the scanning process."""
@@ -351,6 +569,38 @@ class ScanTab(QWidget):
             QMessageBox.warning(self, "No Directories", "Please add at least one directory to scan.")
             return
         
+        # Show processing summary
+        summary_text = f"""
+Processing Summary:
+
+Directories to scan: {len(self.source_directories)}
+Directories:
+"""
+        for i, directory in enumerate(self.source_directories, 1):
+            summary_text += f"  {i}. {directory}\n"
+        
+        summary_text += f"""
+This will:
+1. Scan all directories for image files
+2. Validate and process each image
+3. Generate CLIP embeddings for similarity detection
+4. Calculate quality metrics (BRISQUE/NIQE)
+5. Find and group duplicate images
+6. Select the best quality image from each group
+
+Processing may take several minutes depending on the number of images.
+        """
+        
+        reply = QMessageBox.question(
+            self, "Start Processing", 
+            summary_text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        
         # Create deduplication configuration
         config = DeduplicationConfig(
             similarity_threshold=self.similarity_threshold.value(),
@@ -370,11 +620,14 @@ class ScanTab(QWidget):
         self.processing_thread.progress_updated.connect(self.update_progress)
         self.processing_thread.processing_finished.connect(self.on_processing_finished)
         self.processing_thread.error_occurred.connect(self.on_processing_error)
+        self.processing_thread.scan_results_ready.connect(self.show_scan_summary)
         
         # Update UI state
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
         self.quick_scan_button.setEnabled(False)
+        self.add_dir_button.setEnabled(False)
+        self.add_multiple_button.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         
@@ -396,30 +649,40 @@ class ScanTab(QWidget):
         self.on_processing_finished()
     
     def update_progress(self, value: int, maximum: int, message: str):
-        """Update progress display."""
-        self.progress_bar.setMaximum(maximum)
+        """Update progress bar and status."""
         self.progress_bar.setValue(value)
-        self.log_message(message)
-        self.progress_updated.emit(value, maximum, message)
+        self.progress_bar.setMaximum(maximum)
+        
+        if message:
+            self.log_message(message)
+            
+        # Update progress percentage
+        if maximum > 0:
+            percentage = (value / maximum) * 100
+            self.progress_bar.setFormat(f"{percentage:.1f}% - {message}")
+        else:
+            self.progress_bar.setFormat(message)
     
     def on_processing_finished(self, duplicate_groups=None):
-        """Called when processing finishes."""
+        """Handle processing completion."""
         # Update UI state
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
         self.quick_scan_button.setEnabled(True)
+        self.add_dir_button.setEnabled(True)
+        self.add_multiple_button.setEnabled(True)
         self.progress_bar.setVisible(False)
         
+        # Enable consolidate button
+        self.consolidate_button.setEnabled(True)
+        self.test_similarity_button.setEnabled(True)
+        self.show_stats_button.setEnabled(True)
+        
         if duplicate_groups:
-            self.log_message(f"Processing completed! Found {len(duplicate_groups)} duplicate groups.")
-            QMessageBox.information(
-                self, "Processing Complete", 
-                f"Processing completed successfully!\n\n"
-                f"Found {len(duplicate_groups)} duplicate groups.\n"
-                f"You can now review the duplicates in the Review tab."
-            )
+            self.log_message(f"Processing completed. Found {len(duplicate_groups)} duplicate groups.")
         else:
-            self.log_message("Processing completed.")
+            self.log_message("Processing completed. No duplicates found.")
+            self.log_message("Try clicking 'Test Similarity' to see if lower thresholds find duplicates.")
         
         self.processing_finished.emit()
     
@@ -432,4 +695,296 @@ class ScanTab(QWidget):
     def log_message(self, message: str):
         """Add a message to the status text."""
         self.status_text.append(f"[{QTimer().remainingTime()}] {message}")
-        self.status_text.ensureCursorVisible() 
+        self.status_text.ensureCursorVisible()
+    
+    def show_scan_summary(self, scan_results: Dict[str, Any]):
+        """Show a summary of the scan results."""
+        summary_text = f"""
+Scan Completed Successfully!
+
+Directories Scanned: {scan_results.get('directories_scanned', 0)}
+Total Images Found: {scan_results.get('total_images_found', 0)}
+Valid Images Processed: {scan_results.get('total_images_processed', 0)}
+Corrupted Files Skipped: {scan_results.get('corrupted_files_skipped', 0)}
+Scan Duration: {scan_results.get('scan_duration', 0):.2f} seconds
+
+The scan has completed and all valid images have been processed.
+Corrupted files have been automatically skipped and will not be included in deduplication.
+        """
+        
+        QMessageBox.information(self, "Scan Complete", summary_text)
+    
+    def consolidate_files(self):
+        """Consolidate files to a single output directory."""
+        if not self.deduplicator:
+            QMessageBox.warning(self, "No Processing", "Please run processing first to identify duplicates.")
+            return
+        
+        # Get file summary first
+        try:
+            file_summary = self.deduplicator.get_file_summary()
+            
+            summary_text = f"""
+File Summary:
+
+Total Files Found: {file_summary['total_files']}
+Processed Images: {file_summary['processed_images_count']}
+Video Files: {file_summary['video_files_count']}
+Corrupted Files: {file_summary['corrupted_files_count']}
+Unprocessed Files: {file_summary['unprocessed_files_count']}
+
+What would you like to consolidate?
+            """
+            
+            # Show summary and get user choice
+            reply = QMessageBox.question(
+                self, "File Summary", 
+                summary_text,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+                
+        except Exception as e:
+            logger.error(f"Failed to get file summary: {e}")
+            # Continue with basic consolidation if summary fails
+        
+        # Get output directory
+        output_directory = QFileDialog.getExistingDirectory(
+            self, "Select Output Directory for Consolidated Files"
+        )
+        
+        if not output_directory:
+            return
+        
+        output_path = Path(output_directory)
+        
+        # Ask user for consolidation options
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Consolidation Options")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(400)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Structure preservation
+        preserve_structure_checkbox = QCheckBox("Preserve subdirectory structure")
+        preserve_structure_checkbox.setChecked(True)
+        preserve_structure_checkbox.setToolTip("Keep the original folder structure from source directories")
+        layout.addWidget(preserve_structure_checkbox)
+        
+        # Copy vs Move
+        copy_radio = QRadioButton("Copy files (keep originals)")
+        copy_radio.setChecked(True)
+        move_radio = QRadioButton("Move files (delete originals)")
+        
+        copy_group = QButtonGroup()
+        copy_group.addButton(copy_radio)
+        copy_group.addButton(move_radio)
+        
+        layout.addWidget(copy_radio)
+        layout.addWidget(move_radio)
+        
+        # File type options
+        layout.addWidget(QLabel("\nFile Types to Include:"))
+        
+        include_videos_checkbox = QCheckBox("Include video files")
+        include_videos_checkbox.setChecked(True)
+        include_videos_checkbox.setToolTip("Copy/move video files (.mp4, .mkv, etc.)")
+        layout.addWidget(include_videos_checkbox)
+        
+        include_corrupted_checkbox = QCheckBox("Include corrupted files")
+        include_corrupted_checkbox.setChecked(False)
+        include_corrupted_checkbox.setToolTip("Copy/move files that failed validation (for manual review)")
+        layout.addWidget(include_corrupted_checkbox)
+        
+        include_unprocessed_checkbox = QCheckBox("Include unprocessed images")
+        include_unprocessed_checkbox.setChecked(True)
+        include_unprocessed_checkbox.setToolTip("Copy/move valid images that weren't processed (for manual review)")
+        layout.addWidget(include_unprocessed_checkbox)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        ok_button = QPushButton("Start Consolidation")
+        cancel_button = QPushButton("Cancel")
+        
+        ok_button.clicked.connect(dialog.accept)
+        cancel_button.clicked.connect(dialog.reject)
+        
+        button_layout.addWidget(ok_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+        
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        
+        # Start consolidation
+        try:
+            preserve_structure = preserve_structure_checkbox.isChecked()
+            copy_mode = copy_radio.isChecked()
+            include_videos = include_videos_checkbox.isChecked()
+            include_corrupted = include_corrupted_checkbox.isChecked()
+            include_unprocessed = include_unprocessed_checkbox.isChecked()
+            
+            self.log_message(f"Starting comprehensive consolidation to {output_path}")
+            self.log_message(f"Mode: {'Copy' if copy_mode else 'Move'}, "
+                           f"Preserve structure: {preserve_structure}")
+            self.log_message(f"Include videos: {include_videos}, "
+                           f"Corrupted: {include_corrupted}, "
+                           f"Unprocessed: {include_unprocessed}")
+            
+            # Run comprehensive consolidation
+            results = self.deduplicator.consolidate_all_files(
+                output_path, 
+                preserve_structure=preserve_structure,
+                copy_mode=copy_mode,
+                include_videos=include_videos,
+                include_corrupted=include_corrupted
+            )
+            
+            # Show results
+            result_text = f"""
+Comprehensive Consolidation Completed!
+
+Output Directory: {output_path}
+
+Results:
+"""
+            
+            for file_type, stats in results.items():
+                if file_type != 'errors':
+                    result_text += f"  {file_type.replace('_', ' ').title()}: {stats['successful']} successful, {stats['failed']} failed\n"
+            
+            if results['errors']:
+                result_text += f"\nErrors:\n"
+                for error in results['errors'][:5]:  # Show first 5 errors
+                    result_text += f"• {error}\n"
+                if len(results['errors']) > 5:
+                    result_text += f"... and {len(results['errors']) - 5} more errors"
+            
+            QMessageBox.information(self, "Consolidation Complete", result_text)
+            
+            total_successful = sum(stats['successful'] for file_type, stats in results.items() if file_type != 'errors')
+            self.log_message(f"Comprehensive consolidation completed: {total_successful} files processed")
+            
+        except Exception as e:
+            logger.error(f"Consolidation failed: {e}")
+            QMessageBox.critical(self, "Consolidation Failed", f"Failed to consolidate files: {e}")
+            self.log_message(f"Consolidation failed: {e}")
+
+    def test_similarity_detection(self):
+        """Test similarity detection with different thresholds."""
+        if not self.deduplicator:
+            QMessageBox.warning(self, "No Processing", "Please run processing first.")
+            return
+        
+        try:
+            self.log_message("Testing similarity detection with different thresholds...")
+            
+            # Test with different thresholds
+            results = self.deduplicator.test_similarity_detection()
+            
+            if not results:
+                QMessageBox.information(self, "Test Results", "No processed images found to test.")
+                return
+            
+            # Show results
+            result_text = "Similarity Detection Test Results:\n\n"
+            
+            for threshold_key, threshold_results in results.items():
+                threshold = threshold_key.replace('threshold_', '')
+                result_text += f"Threshold {threshold}:\n"
+                result_text += f"  Groups found: {threshold_results['groups_found']}\n"
+                result_text += f"  Total images in groups: {threshold_results['total_images_in_groups']}\n"
+                
+                if threshold_results['groups']:
+                    result_text += f"  Sample groups:\n"
+                    for i, group in enumerate(threshold_results['groups'][:3]):  # Show first 3 groups
+                        result_text += f"    Group {i+1}:\n"
+                        for img in group['images']:
+                            result_text += f"      • {Path(img['file_path']).name} (score: {img['similarity_score']:.3f})\n"
+                
+                result_text += "\n"
+            
+            # Add recommendation
+            best_threshold = None
+            best_groups = 0
+            for threshold_key, threshold_results in results.items():
+                if threshold_results['groups_found'] > best_groups:
+                    best_groups = threshold_results['groups_found']
+                    best_threshold = threshold_key.replace('threshold_', '')
+            
+            if best_threshold:
+                result_text += f"Recommendation: Try threshold {best_threshold} for better duplicate detection.\n"
+                result_text += f"Current threshold: {self.similarity_threshold.value()}"
+            
+            QMessageBox.information(self, "Similarity Test Results", result_text)
+            self.log_message(f"Similarity test completed. Best threshold: {best_threshold}")
+            
+        except Exception as e:
+            logger.error(f"Similarity test failed: {e}")
+            QMessageBox.critical(self, "Test Failed", f"Failed to test similarity detection: {e}")
+            self.log_message(f"Similarity test failed: {e}")
+
+    def show_processing_stats(self):
+        """Show detailed processing statistics."""
+        if not self.deduplicator:
+            QMessageBox.warning(self, "No Processing", "Please run processing first.")
+            return
+        
+        try:
+            # Get scan results
+            scan_results = self.deduplicator.get_scan_results()
+            
+            if not scan_results:
+                QMessageBox.information(self, "No Data", "No scan results available.")
+                return
+            
+            # Get file summary
+            file_summary = self.deduplicator.get_file_summary()
+            
+            stats_text = f"""
+Processing Statistics:
+
+Scan Results:
+  Directories scanned: {scan_results.get('directories_scanned', 0)}
+  Total images found: {scan_results.get('total_images_found', 0)}
+  Successfully processed: {scan_results.get('total_images_processed', 0)}
+  Corrupted files skipped: {scan_results.get('corrupted_files_skipped', 0)}
+  Other files skipped: {scan_results.get('skipped_files_count', 0)}
+  Scan duration: {scan_results.get('scan_duration', 0):.2f} seconds
+
+Current File Status:
+  Processed images: {file_summary.get('processed_images_count', 0)}
+  Video files: {file_summary.get('video_files_count', 0)}
+  Corrupted files: {file_summary.get('corrupted_files_count', 0)}
+  Unprocessed files: {file_summary.get('unprocessed_files_count', 0)}
+  Total files: {file_summary.get('total_files', 0)}
+
+Processing Rate:
+  Images per second: {scan_results.get('total_images_processed', 0) / max(scan_results.get('scan_duration', 1), 1):.1f}
+            """
+            
+            QMessageBox.information(self, "Processing Statistics", stats_text)
+            
+        except Exception as e:
+            logger.error(f"Failed to get processing stats: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to get processing statistics: {e}")
+
+    def clear_database(self):
+        """Clear all data from the database."""
+        reply = QMessageBox.question(
+            self, "Clear Database", 
+            "Are you sure you want to clear all data from the database? This action cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.db_manager.clear_database()
+            self.log_message("Database cleared")
+            self.on_processing_finished()
+        else:
+            self.log_message("Database clearing cancelled") 

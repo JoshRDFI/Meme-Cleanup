@@ -25,11 +25,22 @@ def check_dependencies():
         import cv2
         import numpy
         import PIL
+        import transformers
         print("✓ All required dependencies are available")
     except ImportError as e:
         print(f"Error: Missing dependency - {e}")
         print("Please install dependencies with: pip install -r requirements.txt")
         sys.exit(1)
+
+def setup_environment():
+    """Setup environment variables for optimal performance."""
+    # Disable symlinks warning on Windows
+    os.environ['HF_HUB_DISABLE_SYMLINKS_WARNING'] = '1'
+    
+    # Set PyTorch to use deterministic algorithms for reproducibility
+    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+    
+    print("✓ Environment configured for optimal performance")
 
 def main():
     """Main launcher function."""
@@ -38,6 +49,9 @@ def main():
     
     # Check Python version
     check_python_version()
+    
+    # Setup environment
+    setup_environment()
     
     # Check dependencies
     check_dependencies()
