@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 """
 Settings tab for Meme-Cleanup.
 
@@ -12,7 +11,7 @@ from typing import Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox,
     QCheckBox, QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit, QFileDialog,
-    QMessageBox, QFormLayout, QTabWidget, QTextEdit, QFrame
+    QMessageBox, QFormLayout, QTabWidget, QTextEdit, QFrame, QListWidget
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -120,7 +119,7 @@ class SettingsTab(QWidget):
         
         # Quality metric
         self.quality_metric = QComboBox()
-        self.quality_metric.addItems(["combined", "brisque", "niqe"])
+        self.quality_metric.addItems(["BRISQUE", "NIQE", "Combined"])
         self.quality_metric.setToolTip("Quality metric for selecting best images")
         processing_layout.addRow("Quality Metric:", self.quality_metric)
         
@@ -143,6 +142,31 @@ class SettingsTab(QWidget):
         self.n_jobs.setToolTip("-1 = Use all available CPU cores")
         processing_layout.addRow("CPU Jobs:", self.n_jobs)
         
+        # Skip options
+        self.skip_corrupted = QCheckBox("Skip Corrupted Files")
+        self.skip_corrupted.setChecked(True)
+        self.skip_corrupted.setToolTip("Skip files that cannot be loaded")
+        processing_layout.addRow("", self.skip_corrupted)
+        
+        self.skip_animated = QCheckBox("Skip Animated Files")
+        self.skip_animated.setChecked(False)
+        self.skip_animated.setToolTip("Skip GIF and animated WebP files")
+        processing_layout.addRow("", self.skip_animated)
+        
+        # Min file size
+        self.min_file_size = QSpinBox()
+        self.min_file_size.setRange(0, 1000000)
+        self.min_file_size.setValue(1000)
+        self.min_file_size.setSuffix(" bytes")
+        self.min_file_size.setToolTip("Minimum file size to process")
+        processing_layout.addRow("Minimum File Size:", self.min_file_size)
+        
+        # Save progress
+        self.save_progress = QCheckBox("Save Progress Automatically")
+        self.save_progress.setChecked(True)
+        self.save_progress.setToolTip("Automatically save processing progress")
+        processing_layout.addRow("", self.save_progress)
+        
         layout.addWidget(processing_group)
         layout.addStretch()
         
@@ -164,6 +188,12 @@ class SettingsTab(QWidget):
         self.dark_theme.setChecked(True)
         self.dark_theme.setToolTip("Enable dark theme for the application")
         ui_layout.addRow("", self.dark_theme)
+        
+        # Auto-save enabled
+        self.auto_save_enabled = QCheckBox("Enable Auto-save")
+        self.auto_save_enabled.setChecked(True)
+        self.auto_save_enabled.setToolTip("Automatically save sessions")
+        ui_layout.addRow("", self.auto_save_enabled)
         
         # Auto-save interval
         self.auto_save_interval = QSpinBox()
@@ -210,40 +240,37 @@ class SettingsTab(QWidget):
         
         # Database path
         db_layout = QHBoxLayout()
-        self.db_path_edit = QLineEdit()
-        self.db_path_edit.setPlaceholderText("Leave empty for default location")
-        self.db_path_edit.setToolTip("Custom database file location")
-        db_layout.addWidget(self.db_path_edit)
+        self.db_path = QLineEdit()
+        self.db_path.setToolTip("Path to SQLite database file")
+        db_layout.addWidget(self.db_path)
         
-        self.db_browse_button = QPushButton("Browse")
-        self.db_browse_button.clicked.connect(self.browse_database_path)
-        db_layout.addWidget(self.db_browse_button)
+        self.browse_db_button = QPushButton("Browse")
+        self.browse_db_button.clicked.connect(self.browse_database_path)
+        db_layout.addWidget(self.browse_db_button)
         
         paths_layout.addRow("Database Path:", db_layout)
         
         # Log file path
         log_layout = QHBoxLayout()
-        self.log_path_edit = QLineEdit()
-        self.log_path_edit.setPlaceholderText("Leave empty for default location")
-        self.log_path_edit.setToolTip("Custom log file location")
-        log_layout.addWidget(self.log_path_edit)
+        self.log_path = QLineEdit()
+        self.log_path.setToolTip("Path to log file")
+        log_layout.addWidget(self.log_path)
         
-        self.log_browse_button = QPushButton("Browse")
-        self.log_browse_button.clicked.connect(self.browse_log_path)
-        log_layout.addWidget(self.log_browse_button)
+        self.browse_log_button = QPushButton("Browse")
+        self.browse_log_button.clicked.connect(self.browse_log_path)
+        log_layout.addWidget(self.browse_log_button)
         
         paths_layout.addRow("Log File Path:", log_layout)
         
         # Output directory
         output_layout = QHBoxLayout()
-        self.output_dir_edit = QLineEdit()
-        self.output_dir_edit.setPlaceholderText("Default output directory for consolidated images")
-        self.output_dir_edit.setToolTip("Default directory for saving consolidated images")
-        output_layout.addWidget(self.output_dir_edit)
+        self.output_directory = QLineEdit()
+        self.output_directory.setToolTip("Default output directory for consolidated files")
+        output_layout.addWidget(self.output_directory)
         
-        self.output_browse_button = QPushButton("Browse")
-        self.output_browse_button.clicked.connect(self.browse_output_directory)
-        output_layout.addWidget(self.output_browse_button)
+        self.browse_output_button = QPushButton("Browse")
+        self.browse_output_button.clicked.connect(self.browse_output_directory)
+        output_layout.addWidget(self.browse_output_button)
         
         paths_layout.addRow("Output Directory:", output_layout)
         
@@ -253,28 +280,25 @@ class SettingsTab(QWidget):
         return tab
     
     def create_sessions_tab(self) -> QWidget:
-        """Create the sessions management tab."""
+        """Create the session management tab."""
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
         
-        # Sessions group
+        # Session management group
         sessions_group = QGroupBox("Session Management")
         sessions_layout = QVBoxLayout(sessions_group)
         
-        # Sessions list
-        self.sessions_text = QTextEdit()
-        self.sessions_text.setReadOnly(True)
-        self.sessions_text.setMaximumHeight(200)
-        self.sessions_text.setToolTip("List of available sessions")
-        sessions_layout.addWidget(QLabel("Available Sessions:"))
-        sessions_layout.addWidget(self.sessions_text)
+        # Session list
+        self.session_list = QListWidget()
+        self.session_list.setMaximumHeight(200)
+        sessions_layout.addWidget(self.session_list)
         
-        # Session actions
+        # Session buttons
         session_buttons_layout = QHBoxLayout()
         
-        self.refresh_sessions_button = QPushButton("Refresh Sessions")
+        self.refresh_sessions_button = QPushButton("Refresh")
         self.refresh_sessions_button.clicked.connect(self.refresh_sessions)
         session_buttons_layout.addWidget(self.refresh_sessions_button)
         
@@ -300,22 +324,25 @@ class SettingsTab(QWidget):
             self.use_gpu.setChecked(self.config_manager.processing.use_gpu)
             self.parallel_processing.setChecked(self.config_manager.processing.parallel_processing)
             self.n_jobs.setValue(self.config_manager.processing.n_jobs)
+            self.skip_corrupted.setChecked(self.config_manager.processing.skip_corrupted)
+            self.skip_animated.setChecked(self.config_manager.processing.skip_animated)
+            self.min_file_size.setValue(self.config_manager.processing.min_file_size)
+            self.save_progress.setChecked(self.config_manager.processing.save_progress)
             
             # UI settings
             self.dark_theme.setChecked(self.config_manager.ui.dark_theme)
+            self.auto_save_enabled.setChecked(self.config_manager.ui.auto_save_enabled)
             self.auto_save_interval.setValue(self.config_manager.ui.auto_save_interval)
             self.window_width.setValue(self.config_manager.ui.window_width)
             self.window_height.setValue(self.config_manager.ui.window_height)
             
-            # Paths settings
-            self.db_path_edit.setText(self.config_manager.paths.database_path)
-            self.log_path_edit.setText(self.config_manager.paths.log_file_path)
-            self.output_dir_edit.setText(self.config_manager.paths.output_directory)
+            # Paths
+            self.db_path.setText(str(self.config_manager.paths.database_path))
+            self.log_path.setText(str(self.config_manager.paths.log_file_path))
+            self.output_directory.setText(str(self.config_manager.paths.output_directory))
             
-            # Load sessions
+            # Refresh sessions
             self.refresh_sessions()
-            
-            logger.info("Settings loaded successfully")
             
         except Exception as e:
             logger.error(f"Failed to load settings: {e}")
@@ -323,299 +350,143 @@ class SettingsTab(QWidget):
     def save_settings(self):
         """Save current settings to configuration manager."""
         try:
-            # Update processing config
-            self.config_manager.update_processing_config(
-                similarity_threshold=self.similarity_threshold.value(),
-                batch_size=self.batch_size.value(),
-                quality_metric=self.quality_metric.currentText(),
-                use_gpu=self.use_gpu.isChecked(),
-                parallel_processing=self.parallel_processing.isChecked(),
-                n_jobs=self.n_jobs.value()
-            )
+            # Processing settings
+            self.config_manager.processing.similarity_threshold = self.similarity_threshold.value()
+            self.config_manager.processing.batch_size = self.batch_size.value()
+            self.config_manager.processing.quality_metric = self.quality_metric.currentText()
+            self.config_manager.processing.use_gpu = self.use_gpu.isChecked()
+            self.config_manager.processing.parallel_processing = self.parallel_processing.isChecked()
+            self.config_manager.processing.n_jobs = self.n_jobs.value()
+            self.config_manager.processing.skip_corrupted = self.skip_corrupted.isChecked()
+            self.config_manager.processing.skip_animated = self.skip_animated.isChecked()
+            self.config_manager.processing.min_file_size = self.min_file_size.value()
+            self.config_manager.processing.save_progress = self.save_progress.isChecked()
             
-            # Update UI config
-            self.config_manager.update_ui_config(
-                dark_theme=self.dark_theme.isChecked(),
-                auto_save_interval=self.auto_save_interval.value(),
-                window_width=self.window_width.value(),
-                window_height=self.window_height.value()
-            )
+            # UI settings
+            self.config_manager.ui.dark_theme = self.dark_theme.isChecked()
+            self.config_manager.ui.auto_save_enabled = self.auto_save_enabled.isChecked()
+            self.config_manager.ui.auto_save_interval = self.auto_save_interval.value()
+            self.config_manager.ui.window_width = self.window_width.value()
+            self.config_manager.ui.window_height = self.window_height.value()
             
-            # Update paths config
-            self.config_manager.update_paths_config(
-                database_path=self.db_path_edit.text(),
-                log_file_path=self.log_path_edit.text(),
-                output_directory=self.output_dir_edit.text()
-            )
+            # Paths
+            self.config_manager.paths.database_path = Path(self.db_path.text())
+            self.config_manager.paths.log_file_path = Path(self.log_path.text()) if self.log_path.text() else None
+            self.config_manager.paths.output_directory = Path(self.output_directory.text())
             
-            QMessageBox.information(self, "Settings Saved", "Settings have been saved successfully.")
-            logger.info("Settings saved successfully")
+            # Save to file
+            self.config_manager.save_config()
+            
+            QMessageBox.information(
+                self, "Settings Saved",
+                "Settings have been saved successfully."
+            )
             
         except Exception as e:
             logger.error(f"Failed to save settings: {e}")
-            QMessageBox.critical(self, "Error", f"Failed to save settings: {e}")
+            QMessageBox.critical(
+                self, "Error",
+                f"Failed to save settings: {e}"
+            )
     
     def reset_settings(self):
-        """Reset settings to default values."""
+        """Reset settings to defaults."""
         reply = QMessageBox.question(
             self, "Reset Settings",
-            "Are you sure you want to reset all settings to default values?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            "This will reset all settings to their default values.\n\n"
+            "Are you sure you want to continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
         
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                self.config_manager.reset_config()
+                self.config_manager.reset_to_defaults()
                 self.load_settings()
-                QMessageBox.information(self, "Settings Reset", "Settings have been reset to default values.")
-                logger.info("Settings reset to defaults")
-                
+                QMessageBox.information(
+                    self, "Settings Reset",
+                    "Settings have been reset to defaults."
+                )
             except Exception as e:
                 logger.error(f"Failed to reset settings: {e}")
-                QMessageBox.critical(self, "Error", f"Failed to reset settings: {e}")
+                QMessageBox.critical(
+                    self, "Error",
+                    f"Failed to reset settings: {e}"
+                )
     
     def browse_database_path(self):
-        """Browse for database file path."""
+        """Browse for database path."""
         file_path, _ = QFileDialog.getSaveFileName(
-            self, "Select Database File", "",
+            self, "Select Database File",
+            str(self.config_manager.paths.database_path),
             "SQLite Database (*.db);;All Files (*)"
         )
         if file_path:
-            self.db_path_edit.setText(file_path)
+            self.db_path.setText(file_path)
     
     def browse_log_path(self):
         """Browse for log file path."""
         file_path, _ = QFileDialog.getSaveFileName(
-            self, "Select Log File", "",
+            self, "Select Log File",
+            str(self.config_manager.paths.log_file_path or Path.home()),
             "Log Files (*.log);;Text Files (*.txt);;All Files (*)"
         )
         if file_path:
-            self.log_path_edit.setText(file_path)
+            self.log_path.setText(file_path)
     
     def browse_output_directory(self):
         """Browse for output directory."""
-        dir_path = QFileDialog.getExistingDirectory(
-            self, "Select Output Directory", ""
+        directory = QFileDialog.getExistingDirectory(
+            self, "Select Output Directory",
+            str(self.config_manager.paths.output_directory)
         )
-        if dir_path:
-            self.output_dir_edit.setText(dir_path)
+        if directory:
+            self.output_directory.setText(directory)
     
     def refresh_sessions(self):
-        """Refresh the sessions list."""
+        """Refresh the session list."""
         try:
+            self.session_list.clear()
             sessions = self.config_manager.list_sessions()
             
-            if not sessions:
-                self.sessions_text.setText("No sessions found.")
-                return
-            
-            # Format sessions for display
-            session_text = ""
             for session in sessions:
-                session_text += f"ID: {session['id']}\n"
-                session_text += f"Name: {session['name']}\n"
-                session_text += f"Status: {session['status']}\n"
-                session_text += f"Images: {session['processed_images']}/{session['total_images']}\n"
-                session_text += f"Last Modified: {session['last_modified'][:19]}\n"
-                session_text += "-" * 40 + "\n"
-            
-            self.sessions_text.setText(session_text)
-            
+                session_info = f"{session['name']} ({session['created_at']})"
+                self.session_list.addItem(session_info)
+                
         except Exception as e:
             logger.error(f"Failed to refresh sessions: {e}")
-            self.sessions_text.setText(f"Error loading sessions: {e}")
     
     def delete_selected_session(self):
         """Delete the selected session."""
-        # For now, this is a placeholder. In a full implementation,
-        # you would get the selected session from the text widget
-        # and delete it. This would require a more sophisticated UI.
-        QMessageBox.information(
+        current_row = self.session_list.currentRow()
+        if current_row < 0:
+            QMessageBox.warning(
+                self, "No Selection",
+                "Please select a session to delete."
+            )
+            return
+        
+        reply = QMessageBox.question(
             self, "Delete Session",
-            "Session deletion functionality will be implemented in a future update."
-        ) 
-=======
-"""
-Settings tab for Meme-Cleanup.
-
-Provides configuration options for the application.
-"""
-
-import logging
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QGroupBox,
-    QCheckBox, QSpinBox, QDoubleSpinBox, QComboBox, QLineEdit, QFileDialog
-)
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
-
-
-logger = logging.getLogger(__name__)
-
-
-class SettingsTab(QWidget):
-    """Tab for application settings."""
-    
-    def __init__(self):
-        """Initialize settings tab."""
-        super().__init__()
-        self.setup_ui()
-        self.load_settings()
-        logger.info("Settings tab initialized")
-    
-    def setup_ui(self):
-        """Setup the user interface."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
+            "Are you sure you want to delete the selected session?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
         
-        # Title
-        title_label = QLabel("Settings")
-        title_font = QFont()
-        title_font.setPointSize(16)
-        title_font.setBold(True)
-        title_label.setFont(title_font)
-        title_label.setStyleSheet("color: #4A90E2; margin-bottom: 10px;")
-        layout.addWidget(title_label)
-        
-        # Processing settings
-        processing_group = QGroupBox("Processing Settings")
-        processing_layout = QVBoxLayout(processing_group)
-        
-        # Default similarity threshold
-        threshold_layout = QHBoxLayout()
-        threshold_layout.addWidget(QLabel("Default Similarity Threshold:"))
-        self.default_similarity = QDoubleSpinBox()
-        self.default_similarity.setRange(0.1, 1.0)
-        self.default_similarity.setValue(0.8)
-        self.default_similarity.setSingleStep(0.05)
-        self.default_similarity.setDecimals(2)
-        threshold_layout.addWidget(self.default_similarity)
-        threshold_layout.addStretch()
-        processing_layout.addLayout(threshold_layout)
-        
-        # Default batch size
-        batch_layout = QHBoxLayout()
-        batch_layout.addWidget(QLabel("Default Batch Size:"))
-        self.default_batch_size = QSpinBox()
-        self.default_batch_size.setRange(1, 32)
-        self.default_batch_size.setValue(8)
-        batch_layout.addWidget(self.default_batch_size)
-        batch_layout.addStretch()
-        processing_layout.addLayout(batch_layout)
-        
-        # Default quality metric
-        quality_layout = QHBoxLayout()
-        quality_layout.addWidget(QLabel("Default Quality Metric:"))
-        self.default_quality_metric = QComboBox()
-        self.default_quality_metric.addItems(["combined", "brisque", "niqe"])
-        quality_layout.addWidget(self.default_quality_metric)
-        quality_layout.addStretch()
-        processing_layout.addLayout(quality_layout)
-        
-        # Use GPU by default
-        self.use_gpu_default = QCheckBox("Use GPU by default")
-        self.use_gpu_default.setChecked(True)
-        processing_layout.addWidget(self.use_gpu_default)
-        
-        layout.addWidget(processing_group)
-        
-        # UI settings
-        ui_group = QGroupBox("Interface Settings")
-        ui_layout = QVBoxLayout(ui_group)
-        
-        # Auto-refresh interval
-        refresh_layout = QHBoxLayout()
-        refresh_layout.addWidget(QLabel("Auto-refresh Interval (seconds):"))
-        self.auto_refresh_interval = QSpinBox()
-        self.auto_refresh_interval.setRange(1, 60)
-        self.auto_refresh_interval.setValue(5)
-        refresh_layout.addWidget(self.auto_refresh_interval)
-        refresh_layout.addStretch()
-        ui_layout.addLayout(refresh_layout)
-        
-        # Show file paths
-        self.show_file_paths = QCheckBox("Show full file paths in tables")
-        self.show_file_paths.setChecked(False)
-        ui_layout.addWidget(self.show_file_paths)
-        
-        # Confirm deletions
-        self.confirm_deletions = QCheckBox("Confirm before deleting files")
-        self.confirm_deletions.setChecked(True)
-        ui_layout.addWidget(self.confirm_deletions)
-        
-        layout.addWidget(ui_group)
-        
-        # Storage settings
-        storage_group = QGroupBox("Storage Settings")
-        storage_layout = QVBoxLayout(storage_group)
-        
-        # Database location
-        db_layout = QHBoxLayout()
-        db_layout.addWidget(QLabel("Database Location:"))
-        self.db_location = QLineEdit()
-        self.db_location.setReadOnly(True)
-        db_layout.addWidget(self.db_location)
-        
-        self.browse_db_button = QPushButton("Browse")
-        self.browse_db_button.clicked.connect(self.browse_database_location)
-        db_layout.addWidget(self.browse_db_button)
-        
-        storage_layout.addLayout(db_layout)
-        
-        # Log file location
-        log_layout = QHBoxLayout()
-        log_layout.addWidget(QLabel("Log File Location:"))
-        self.log_location = QLineEdit()
-        self.log_location.setReadOnly(True)
-        log_layout.addWidget(self.log_location)
-        
-        self.browse_log_button = QPushButton("Browse")
-        self.browse_log_button.clicked.connect(self.browse_log_location)
-        log_layout.addWidget(self.browse_log_button)
-        
-        storage_layout.addLayout(log_layout)
-        
-        layout.addWidget(storage_group)
-        
-        # Action buttons
-        action_layout = QHBoxLayout()
-        
-        self.save_button = QPushButton("Save Settings")
-        self.save_button.clicked.connect(self.save_settings)
-        action_layout.addWidget(self.save_button)
-        
-        self.reset_button = QPushButton("Reset to Defaults")
-        self.reset_button.clicked.connect(self.reset_settings)
-        action_layout.addWidget(self.reset_button)
-        
-        action_layout.addStretch()
-        
-        layout.addLayout(action_layout)
-        layout.addStretch()
-    
-    def load_settings(self):
-        """Load current settings."""
-        # TODO: Load settings from configuration file
-        logger.info("Loading settings")
-    
-    def save_settings(self):
-        """Save current settings."""
-        # TODO: Save settings to configuration file
-        logger.info("Saving settings")
-    
-    def reset_settings(self):
-        """Reset settings to defaults."""
-        # TODO: Reset all settings to default values
-        logger.info("Resetting settings to defaults")
-    
-    def browse_database_location(self):
-        """Browse for database location."""
-        # TODO: Implement database location browsing
-        logger.info("Browsing for database location")
-    
-    def browse_log_location(self):
-        """Browse for log file location."""
-        # TODO: Implement log file location browsing
-        logger.info("Browsing for log file location") 
->>>>>>> 88a757b8ecc4ae4d819ae02a34c56b2a1ebc3714
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                sessions = self.config_manager.list_sessions()
+                if current_row < len(sessions):
+                    session = sessions[current_row]
+                    self.config_manager.delete_session(session['id'])
+                    self.refresh_sessions()
+                    QMessageBox.information(
+                        self, "Session Deleted",
+                        "Session has been deleted successfully."
+                    )
+            except Exception as e:
+                logger.error(f"Failed to delete session: {e}")
+                QMessageBox.critical(
+                    self, "Error",
+                    f"Failed to delete session: {e}"
+                )

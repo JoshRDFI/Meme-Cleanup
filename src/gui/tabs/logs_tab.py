@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 """
 Logs tab for Meme-Cleanup.
 
@@ -215,26 +214,22 @@ class LogsTab(QWidget):
         
         # Update display
         self.log_display.clear()
-        
         for msg in self.filtered_messages:
-            # Color code by level
             color = self.get_level_color(msg['level'])
             self.log_display.append(f'<span style="color: {color};">{msg["message"]}</span>')
         
         # Restore scroll position
         if self.auto_scroll and was_at_bottom:
-            cursor = self.log_display.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            self.log_display.setTextCursor(cursor)
+            scrollbar.setValue(scrollbar.maximum())
     
     def get_level_color(self, level: str) -> str:
         """Get color for log level."""
         colors = {
             'DEBUG': '#888888',
             'INFO': '#4A90E2',
-            'WARNING': '#FFA500',
-            'ERROR': '#E94E77',
-            'CRITICAL': '#FF0000'
+            'WARNING': '#F39C12',
+            'ERROR': '#E74C3C',
+            'CRITICAL': '#C0392B'
         }
         return colors.get(level, '#F5F5F5')
     
@@ -249,16 +244,16 @@ class LogsTab(QWidget):
         self.auto_scroll = enabled
     
     def refresh_logs(self):
-        """Refresh the log display."""
+        """Refresh log display."""
         self.apply_filters()
-        logger.info("Logs refreshed")
     
     def clear_logs(self):
         """Clear all log messages."""
         reply = QMessageBox.question(
             self, "Clear Logs",
             "Are you sure you want to clear all log messages?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
         )
         
         if reply == QMessageBox.StandardButton.Yes:
@@ -266,22 +261,20 @@ class LogsTab(QWidget):
             self.filtered_messages.clear()
             self.log_display.clear()
             self.update_stats()
-            logger.info("Logs cleared")
     
     def save_logs(self):
         """Save logs to file."""
         if not self.filtered_messages:
-            QMessageBox.information(
+            QMessageBox.warning(
                 self, "No Logs",
                 "No log messages to save."
             )
             return
         
         # Get save location
-        if self.config_manager and self.config_manager.paths.log_file_path:
-            default_path = self.config_manager.paths.log_file_path
-        else:
-            default_path = str(Path.home() / "meme_cleanup_logs.txt")
+        default_path = ""
+        if self.config_manager:
+            default_path = str(self.config_manager.get_log_directory() / "exported_logs.txt")
         
         file_path, _ = QFileDialog.getSaveFileName(
             self, "Save Logs",
@@ -292,297 +285,81 @@ class LogsTab(QWidget):
         if file_path:
             try:
                 with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(f"Meme-Cleanup Logs - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write("=" * 60 + "\n\n")
-                    
                     for msg in self.filtered_messages:
                         f.write(f"{msg['message']}\n")
                 
                 QMessageBox.information(
                     self, "Logs Saved",
-                    f"Logs saved successfully to:\n{file_path}"
+                    f"Logs have been saved to:\n{file_path}"
                 )
-                
-                logger.info(f"Logs saved to: {file_path}")
                 
             except Exception as e:
                 logger.error(f"Failed to save logs: {e}")
                 QMessageBox.critical(
-                    self, "Save Error",
+                    self, "Error",
                     f"Failed to save logs: {e}"
                 )
     
     def copy_selected(self):
         """Copy selected text to clipboard."""
         cursor = self.log_display.textCursor()
-        selected_text = cursor.selectedText()
-        
-        if selected_text:
-            clipboard = self.log_display.clipboard()
-            clipboard.setText(selected_text)
+        if cursor.hasSelection():
+            text = cursor.selectedText()
+            self.log_display.copy()
             QMessageBox.information(
                 self, "Copied",
-                "Selected text copied to clipboard."
+                "Selected text has been copied to clipboard."
             )
         else:
-            QMessageBox.information(
+            QMessageBox.warning(
                 self, "No Selection",
                 "Please select text to copy."
             )
     
     def load_existing_logs(self):
-        """Load existing logs from log file."""
+        """Load existing logs from file if available."""
         if not self.config_manager:
             return
         
-        log_file_path = self.config_manager.get_log_file_path()
-        if not log_file_path.exists():
-            return
-        
-        try:
-            with open(log_file_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            
-            # Parse existing log lines (simple parsing)
-            for line in lines[-100:]:  # Load last 100 lines
-                line = line.strip()
-                if line:
-                    # Try to parse log level from line
-                    level = "INFO"
-                    if " - DEBUG - " in line:
-                        level = "DEBUG"
-                    elif " - INFO - " in line:
-                        level = "INFO"
-                    elif " - WARNING - " in line:
-                        level = "WARNING"
-                    elif " - ERROR - " in line:
-                        level = "ERROR"
-                    elif " - CRITICAL - " in line:
-                        level = "CRITICAL"
-                    
-                    # Extract message
-                    parts = line.split(" - ", 3)
-                    if len(parts) >= 4:
-                        message = parts[3]
-                    else:
-                        message = line
-                    
-                    self.add_log_message(message, level)
-            
-            logger.info(f"Loaded {len(lines)} existing log lines")
-            
-        except Exception as e:
-            logger.error(f"Failed to load existing logs: {e}")
+        log_file = self.config_manager.get_log_file_path()
+        if log_file and log_file.exists():
+            try:
+                with open(log_file, 'r', encoding='utf-8') as f:
+                    for line in f.readlines()[-100:]:  # Load last 100 lines
+                        line = line.strip()
+                        if line:
+                            # Parse log line
+                            try:
+                                # Simple parsing - extract level and message
+                                if ' - ' in line:
+                                    parts = line.split(' - ', 3)
+                                    if len(parts) >= 4:
+                                        timestamp, name, level, message = parts
+                                        self.add_log_message(message, level)
+                                    else:
+                                        self.add_log_message(line)
+                                else:
+                                    self.add_log_message(line)
+                            except Exception:
+                                self.add_log_message(line)
+                
+                logger.info(f"Loaded {len(self.log_messages)} existing log messages")
+                
+            except Exception as e:
+                logger.error(f"Failed to load existing logs: {e}")
     
     def closeEvent(self, event):
-        """Handle tab close event."""
-        # Remove custom log handler
-        if hasattr(self, 'log_handler'):
-            logging.getLogger().removeHandler(self.log_handler)
-        
-        event.accept() 
-=======
-"""
-Logs tab for Meme-Cleanup.
-
-Displays application logs and processing information.
-"""
-
-import logging
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit,
-    QComboBox, QCheckBox, QGroupBox
-)
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont, QTextCursor
-
-
-logger = logging.getLogger(__name__)
-
-
-class LogsTab(QWidget):
-    """Tab for displaying application logs."""
-    
-    def __init__(self):
-        """Initialize logs tab."""
-        super().__init__()
-        self.setup_ui()
-        self.setup_log_capture()
-        logger.info("Logs tab initialized")
-    
-    def setup_ui(self):
-        """Setup the user interface."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
-        
-        # Title
-        title_label = QLabel("Application Logs")
-        title_font = QFont()
-        title_font.setPointSize(16)
-        title_font.setBold(True)
-        title_label.setFont(title_font)
-        title_label.setStyleSheet("color: #4A90E2; margin-bottom: 10px;")
-        layout.addWidget(title_label)
-        
-        # Control panel
-        control_layout = QHBoxLayout()
-        
-        # Log level filter
-        control_layout.addWidget(QLabel("Log Level:"))
-        self.log_level_combo = QComboBox()
-        self.log_level_combo.addItems(["All", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
-        self.log_level_combo.setCurrentText("INFO")
-        self.log_level_combo.currentTextChanged.connect(self.filter_logs)
-        control_layout.addWidget(self.log_level_combo)
-        
-        # Auto-scroll
-        self.auto_scroll_checkbox = QCheckBox("Auto-scroll")
-        self.auto_scroll_checkbox.setChecked(True)
-        control_layout.addWidget(self.auto_scroll_checkbox)
-        
-        # Clear logs
-        self.clear_button = QPushButton("Clear Logs")
-        self.clear_button.clicked.connect(self.clear_logs)
-        control_layout.addWidget(self.clear_button)
-        
-        # Save logs
-        self.save_button = QPushButton("Save Logs")
-        self.save_button.clicked.connect(self.save_logs)
-        control_layout.addWidget(self.save_button)
-        
-        control_layout.addStretch()
-        
-        layout.addLayout(control_layout)
-        
-        # Log display
-        log_group = QGroupBox("Log Messages")
-        log_layout = QVBoxLayout(log_group)
-        
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setFont(QFont("Consolas", 10))
-        self.log_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #1E1E1E;
-                color: #F5F5F5;
-                border: 1px solid #3D3D3D;
-                border-radius: 4px;
-            }
-        """)
-        log_layout.addWidget(self.log_text)
-        
-        layout.addWidget(log_group)
-        
-        # Status bar
-        status_layout = QHBoxLayout()
-        
-        self.log_count_label = QLabel("Log entries: 0")
-        status_layout.addWidget(self.log_count_label)
-        
-        self.last_update_label = QLabel("Last update: Never")
-        status_layout.addWidget(self.last_update_label)
-        
-        status_layout.addStretch()
-        
-        layout.addLayout(status_layout)
-    
-    def setup_log_capture(self):
-        """Setup log capture to display logs in the UI."""
-        # Create a custom log handler
-        self.log_handler = LogDisplayHandler(self)
-        
-        # Add handler to root logger
-        root_logger = logging.getLogger()
-        root_logger.addHandler(self.log_handler)
-        
-        # Add initial log message
-        self.add_log_message("INFO", "Logs tab initialized and ready to capture messages.")
-    
-    def add_log_message(self, level: str, message: str):
-        """Add a log message to the display."""
-        # Check if message should be filtered
-        if not self.should_display_message(level):
-            return
-        
-        # Format the message
-        formatted_message = f"[{level}] {message}"
-        
-        # Add to text widget
-        self.log_text.append(formatted_message)
-        
-        # Auto-scroll if enabled
-        if self.auto_scroll_checkbox.isChecked():
-            cursor = self.log_text.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            self.log_text.setTextCursor(cursor)
-        
-        # Update status
-        self.update_status()
-    
-    def should_display_message(self, level: str) -> bool:
-        """Check if a message should be displayed based on current filter."""
-        current_filter = self.log_level_combo.currentText()
-        
-        if current_filter == "All":
-            return True
-        
-        # Define log level hierarchy
-        levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-        
+        """Handle close event."""
         try:
-            message_level_index = levels.index(level)
-            filter_level_index = levels.index(current_filter)
-            return message_level_index >= filter_level_index
-        except ValueError:
-            return True
-    
-    def filter_logs(self):
-        """Filter logs based on current level selection."""
-        # TODO: Implement log filtering
-        logger.info("Log filtering not yet implemented")
-    
-    def clear_logs(self):
-        """Clear all log messages."""
-        self.log_text.clear()
-        self.update_status()
-        logger.info("Logs cleared by user")
-    
-    def save_logs(self):
-        """Save logs to a file."""
-        # TODO: Implement log saving
-        logger.info("Log saving not yet implemented")
-    
-    def update_status(self):
-        """Update status information."""
-        # Count log entries
-        text = self.log_text.toPlainText()
-        line_count = len(text.split('\n')) if text else 0
-        self.log_count_label.setText(f"Log entries: {line_count}")
-        
-        # Update last update time
-        from datetime import datetime
-        self.last_update_label.setText(f"Last update: {datetime.now().strftime('%H:%M:%S')}")
-
-
-class LogDisplayHandler(logging.Handler):
-    """Custom log handler to display logs in the UI."""
-    
-    def __init__(self, logs_tab: LogsTab):
-        super().__init__()
-        self.logs_tab = logs_tab
-    
-    def emit(self, record):
-        """Emit a log record to the UI."""
-        try:
-            # Format the message
-            message = self.format(record)
+            # Remove log handler
+            if hasattr(self, 'log_handler'):
+                logging.getLogger().removeHandler(self.log_handler)
             
-            # Add to UI (use QTimer to ensure thread safety)
-            QTimer.singleShot(0, lambda: self.logs_tab.add_log_message(record.levelname, message))
+            # Stop timer
+            if hasattr(self, 'update_timer'):
+                self.update_timer.stop()
             
         except Exception as e:
-            # Fallback to stderr if UI logging fails
-            import sys
-            print(f"Log display error: {e}", file=sys.stderr) 
->>>>>>> 88a757b8ecc4ae4d819ae02a34c56b2a1ebc3714
+            logger.error(f"Error during logs tab cleanup: {e}")
+        
+        event.accept()
