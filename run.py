@@ -66,9 +66,9 @@ def main():
     
     # Import and run main application
     try:
-        from main import main as app_main
+        import main
         print("Starting Meme-Cleanup...")
-        app_main()
+        main.main()
     except Exception as e:
         print(f"Error starting application: {e}")
         sys.exit(1)
